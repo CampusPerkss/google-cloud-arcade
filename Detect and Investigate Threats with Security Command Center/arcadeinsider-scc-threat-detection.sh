@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# ================== COLOR SETUP ==================
+# Define color variables
 BLACK_TEXT=$'\033[0;90m'
 RED_TEXT=$'\033[0;91m'
 GREEN_TEXT=$'\033[0;92m'
@@ -10,109 +10,145 @@ MAGENTA_TEXT=$'\033[0;95m'
 CYAN_TEXT=$'\033[0;96m'
 WHITE_TEXT=$'\033[0;97m'
 
-BOLD_TEXT=$'\033[1m'
-UNDERLINE_TEXT=$'\033[4m'
+NO_COLOR=$'\033[0m'
 RESET_FORMAT=$'\033[0m'
 
+# Define text formatting variables
+BOLD_TEXT=$'\033[1m'
+UNDERLINE_TEXT=$'\033[4m'
+BOLD=`tput bold`
+RESET=`tput sgr0`
 clear
 
-# ================== WELCOME ==================
-echo "${CYAN_TEXT}${BOLD_TEXT}========================================================${RESET_FORMAT}"
-echo "${CYAN_TEXT}${BOLD_TEXT}  ARCADEINSIDER | SECURITY COMMAND CENTER LAB STARTED   ${RESET_FORMAT}"
-echo "${CYAN_TEXT}${BOLD_TEXT}========================================================${RESET_FORMAT}"
+
+# Welcome message
+echo "${GREEN_TEXT}${BOLD_TEXT}=======================================${RESET_FORMAT}"
+echo "${GREEN_TEXT}${BOLD_TEXT}         INITIATING EXECUTION...        ${RESET_FORMAT}"
+echo "${GREEN_TEXT}${BOLD_TEXT}=======================================${RESET_FORMAT}"
 echo
 
-set -e
 
-PROJECT_ID=$(gcloud config get-value project)
+# Get zone and region
+echo "Getting compute zone and region..."
+export ZONE=$(gcloud compute project-info describe \
+--format="value(commonInstanceMetadata.items[google-compute-default-zone])")
 
-# ================== GET ZONE & REGION ==================
-echo "${YELLOW_TEXT}${BOLD_TEXT}Fetching default zone & region...${RESET_FORMAT}"
+export REGION=$(gcloud compute project-info describe \
+--format="value(commonInstanceMetadata.items[google-compute-default-region])")
 
-ZONE=$(gcloud compute project-info describe \
-  --format="value(commonInstanceMetadata.items[google-compute-default-zone])")
+# Save IAM policy to JSON
+echo "Getting IAM policy..."
+gcloud projects get-iam-policy $(gcloud config get-value project) \
+    --format=json > policy.json
 
-REGION=$(gcloud compute project-info describe \
-  --format="value(commonInstanceMetadata.items[google-compute-default-region])")
+# Modify IAM policy
+echo "Updating IAM policy..."
+jq '{ 
+  "auditConfigs": [ 
+    { 
+      "service": "cloudresourcemanager.googleapis.com", 
+      "auditLogConfigs": [ 
+        { 
+          "logType": "ADMIN_READ" 
+        } 
+      ] 
+    } 
+  ] 
+} + .' policy.json > updated_policy.json
 
-echo "${GREEN_TEXT}Zone: $ZONE | Region: $REGION${RESET_FORMAT}"
+# Apply updated IAM policy
+echo "Applying IAM policy..."
+gcloud projects set-iam-policy $(gcloud config get-value project) updated_policy.json
 
-# ================== IAM AUDIT CONFIG ==================
-echo
-echo "${YELLOW_TEXT}${BOLD_TEXT}Updating IAM audit configuration...${RESET_FORMAT}"
+# Enable Security Center API
+echo "Enabling Security Center API..."
+gcloud services enable securitycenter.googleapis.com --project=$DEVSHELL_PROJECT_ID
 
-gcloud projects get-iam-policy "$PROJECT_ID" --format=json > policy.json
-
-jq '.auditConfigs += [{
-  "service": "cloudresourcemanager.googleapis.com",
-  "auditLogConfigs": [{ "logType": "ADMIN_READ" }]
-}]' policy.json > updated_policy.json
-
-gcloud projects set-iam-policy "$PROJECT_ID" updated_policy.json
-
-# ================== ENABLE SCC API ==================
-echo
-echo "${YELLOW_TEXT}${BOLD_TEXT}Enabling Security Command Center API...${RESET_FORMAT}"
-gcloud services enable securitycenter.googleapis.com
-
-echo "Waiting for API to activate..."
+# Wait for API to activate
+echo "Waiting 20 seconds..."
 sleep 20
 
-# ================== TEMP IAM ROLE ==================
-echo
-echo "${YELLOW_TEXT}${BOLD_TEXT}Granting BigQuery Admin role temporarily...${RESET_FORMAT}"
+# Grant BigQuery Admin role
+echo "Granting BigQuery Admin role..."
+gcloud projects add-iam-policy-binding $DEVSHELL_PROJECT_ID \
+--member=user:demouser1@gmail.com --role=roles/bigquery.admin
 
-gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-  --member="user:demouser1@gmail.com" \
-  --role="roles/bigquery.admin" --quiet
+# Revoke BigQuery Admin role
+echo "Revoking BigQuery Admin role..."
+gcloud projects remove-iam-policy-binding $DEVSHELL_PROJECT_ID \
+--member=user:demouser1@gmail.com --role=roles/bigquery.admin
 
-echo "${YELLOW_TEXT}${BOLD_TEXT}Revoking BigQuery Admin role...${RESET_FORMAT}"
+# Grant IAM Admin role to user
+echo "Granting IAM Admin role..."
+gcloud projects add-iam-policy-binding $DEVSHELL_PROJECT_ID \
+  --member=user:$USER_EMAIL \
+  --role=roles/cloudresourcemanager.projectIamAdmin 2>/dev/null
 
-gcloud projects remove-iam-policy-binding "$PROJECT_ID" \
-  --member="user:demouser1@gmail.com" \
-  --role="roles/bigquery.admin" --quiet
-
-# ================== CREATE VM ==================
-echo
-echo "${YELLOW_TEXT}${BOLD_TEXT}Creating VM instance...${RESET_FORMAT}"
-
+# Create VM instance
+echo "Creating VM instance..."
 gcloud compute instances create instance-1 \
-  --zone="$ZONE" \
-  --machine-type=e2-medium \
-  --subnet=default \
-  --quiet
+--zone=$ZONE \
+--machine-type=e2-medium \
+--network-interface=network-tier=PREMIUM,stack-type=IPV4_ONLY,subnet=default \
+--metadata=enable-oslogin=true \
+--maintenance-policy=MIGRATE \
+--provisioning-model=STANDARD \
+--scopes=https://www.googleapis.com/auth/cloud-platform \
+--create-disk=auto-delete=yes,boot=yes,device-name=instance-1,\
+image=projects/debian-cloud/global/images/debian-11-bullseye-v20230912,\
+mode=rw,size=10,\
+type=projects/$DEVSHELL_PROJECT_ID/zones/$ZONE/diskTypes/pd-balanced
 
-# ================== DNS POLICY ==================
-echo
-echo "${YELLOW_TEXT}${BOLD_TEXT}Creating DNS policy...${RESET_FORMAT}"
+# Create DNS policy
+echo "Creating DNS policy..."
+gcloud dns --project=$DEVSHELL_PROJECT_ID policies create dns-test-policy \
+--description="quickgcplab" \
+--networks="default" \
+--private-alternative-name-servers="" \
+--no-enable-inbound-forwarding \
+--enable-logging
 
-gcloud dns policies create scc-dns-policy \
-  --networks="default" \
-  --enable-logging \
-  --quiet || true
+# Wait for DNS policy to apply
+echo "Waiting 30 seconds..."
+sleep 30
 
-sleep 20
-
-# ================== TRIGGER FINDING ==================
-echo
-echo "${YELLOW_TEXT}${BOLD_TEXT}Triggering Security Command Center finding...${RESET_FORMAT}"
-
+# SSH into VM and run commands
+echo "Connecting to VM and running commands..."
 gcloud compute ssh instance-1 \
-  --zone="$ZONE" \
-  --quiet \
-  --command="curl etd-malware-trigger.goog" || true
+--zone=$ZONE \
+--tunnel-through-iap \
+--project "$DEVSHELL_PROJECT_ID" \
+--quiet \
+--command "gcloud projects get-iam-policy \$(gcloud config get project) && curl etd-malware-trigger.goog"
 
-# ================== CLEANUP ==================
-echo
-echo "${YELLOW_TEXT}${BOLD_TEXT}Cleaning up resources...${RESET_FORMAT}"
+# Prompt user to confirm progress
+function check_progress {
+    while true; do
+        echo
+        read -p "Make sure to check your progress for Task 1 & Task 2 before moving further. (Y/N): " user_input
+        if [[ "$user_input" == "Y" || "$user_input" == "y" ]]; then
+            echo "Continuing to next steps..."
+            break
+        elif [[ "$user_input" == "N" || "$user_input" == "n" ]]; then
+            echo "Please check your progress, then type Y to continue."
+        else
+            echo "Invalid input. Please enter Y or N."
+        fi
+    done
+}
 
-gcloud compute instances delete instance-1 --zone="$ZONE" --quiet || true
+check_progress
 
-# ================== FINAL MESSAGE ==================
+# Delete VM
+echo "Deleting VM..."
+gcloud compute instances delete instance-1 --zone=$ZONE --quiet
+
+echo "Done."
+
+# Final message
 echo
-echo "${GREEN_TEXT}${BOLD_TEXT}========================================================${RESET_FORMAT}"
-echo "${GREEN_TEXT}${BOLD_TEXT}   LAB COMPLETED: Detect & Investigate Threats (SCC)   ${RESET_FORMAT}"
-echo "${GREEN_TEXT}${BOLD_TEXT}========================================================${RESET_FORMAT}"
+echo "${GREEN_TEXT}${BOLD_TEXT}=======================================================${RESET_FORMAT}"
+echo "${GREEN_TEXT}${BOLD_TEXT}              LAB COMPLETED SUCCESSFULLY!              ${RESET_FORMAT}"
+echo "${GREEN_TEXT}${BOLD_TEXT}=======================================================${RESET_FORMAT}"
 echo
-echo "${CYAN_TEXT}${BOLD_TEXT}${UNDERLINE_TEXT}YouTube: https://www.youtube.com/@ArcadeInsider${RESET_FORMAT}"
-echo "${GREEN_TEXT}${BOLD_TEXT}Like • Share • Subscribe for more Arcade scripts${RESET_FORMAT}"
+echo "${GREEN_TEXT}${BOLD_TEXT}${UNDERLINE_TEXT}https://www.youtube.com/@ArcadeInsider${RESET_FORMAT}"
