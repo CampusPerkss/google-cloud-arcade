@@ -1,101 +1,67 @@
 #!/bin/bash
 set -e
 
-# ================= FIX LINE ENDINGS =================
-sed -i 's/\r$//' "$0"
+# ================== CAMPUSPERKS ==================
+# Arcade Lab Auto Script
+# Easy • Direct • One-Run Commands
+# YouTube: https://www.youtube.com/@CampusPerkss
+# ================================================
 
-# ================= COLORS =================
-BLACK=$(tput setaf 0)
-RED=$(tput setaf 1)
-GREEN=$(tput setaf 2)
-YELLOW=$(tput setaf 3)
-BLUE=$(tput setaf 4)
-MAGENTA=$(tput setaf 5)
-CYAN=$(tput setaf 6)
-WHITE=$(tput setaf 7)
+# ================== FETCH DETAILS ==================
+ZONE=$(gcloud compute project-info describe \
+--format="value(commonInstanceMetadata.items[google-compute-default-zone])")
 
-BOLD=$(tput bold)
-RESET=$(tput sgr0)
+REGION=$(gcloud compute project-info describe \
+--format="value(commonInstanceMetadata.items[google-compute-default-region])")
 
-clear
-
-# ================= WELCOME =================
-echo "${CYAN}${BOLD}==============================================================${RESET}"
-echo "${CYAN}${BOLD}  CAMPUSPERKS 🚀 | Managing Deployments Using Kubernetes Engine ${RESET}"
-echo "${CYAN}${BOLD}==============================================================${RESET}"
-echo "${GREEN}${BOLD}Easy • Direct • One-Click Arcade Commands${RESET}"
-echo
-
-# ================= INPUT =================
-echo "${YELLOW}${BOLD}Enter ZONE (example: us-central1-a): ${RESET}"
-read ZONE
-
-# ================= START =================
-echo
-echo "${YELLOW}${BOLD}Starting${RESET} ${GREEN}${BOLD}Execution...${RESET}"
-echo
+PROJECT_ID=$(gcloud config get-value project)
 
 gcloud config set compute/zone "$ZONE"
 
-# ================= LAB STEPS =================
-gsutil -m cp -r gs://spls/gsp053/orchestrate-with-kubernetes .
+echo "ZONE: $ZONE"
+echo "REGION: $REGION"
+echo "PROJECT: $PROJECT_ID"
+echo
 
-cd orchestrate-with-kubernetes/kubernetes
+# ================== LAB FILES ==================
+gcloud storage cp -r gs://spls/gsp053/kubernetes .
+cd kubernetes
 
+# ================== CREATE CLUSTER ==================
 gcloud container clusters create bootcamp \
 --machine-type e2-small \
 --num-nodes 3 \
---scopes https://www.googleapis.com/auth/projecthosting,storage-rw
+--scopes=https://www.googleapis.com/auth/projecthosting,storage-rw
 
-sed -i 's|image: "kelseyhightower/auth:2.0.0"|image: "kelseyhightower/auth:1.0.0"|' deployments/auth.yaml
+# ================== TASK 2 : BLUE DEPLOYMENT ==================
+kubectl create -f deployments/fortune-app-blue.yaml
+kubectl create -f services/fortune-app.yaml
 
-kubectl create -f deployments/auth.yaml
-kubectl get deployments
-kubectl get pods
+kubectl scale deployment fortune-app-blue --replicas=5
+kubectl get pods | grep fortune-app-blue | wc -l
 
-kubectl create -f services/auth.yaml
-kubectl create -f deployments/hello.yaml
-kubectl create -f services/hello.yaml
+kubectl scale deployment fortune-app-blue --replicas=3
+kubectl get pods | grep fortune-app-blue | wc -l
 
-kubectl create secret generic tls-certs --from-file=tls/
-kubectl create configmap nginx-frontend-conf --from-file=nginx/frontend.conf
+# ================== TASK 3 : UPDATE IMAGE + ENV ==================
+kubectl set image deployment/fortune-app-blue \
+fortune-app=$REGION-docker.pkg.dev/qwiklabs-resources/spl-lab-apps/fortune-service:2.0.0
 
-kubectl create -f deployments/frontend.yaml
-kubectl create -f services/frontend.yaml
+kubectl set env deployment/fortune-app-blue APP_VERSION=2.0.0
 
-kubectl get services frontend
+# ================== CANARY DEPLOYMENT ==================
+kubectl create -f deployments/fortune-app-canary.yaml
 
-sleep 10
+# ================== TASK 5 : BLUE / GREEN ==================
+kubectl apply -f services/fortune-app-blue-service.yaml
+kubectl create -f deployments/fortune-app-green.yaml
+kubectl apply -f services/fortune-app-green-service.yaml
+kubectl apply -f services/fortune-app-blue-service.yaml
 
-kubectl scale deployment hello --replicas=5
-kubectl get pods | grep hello- | wc -l
-
-kubectl scale deployment hello --replicas=3
-kubectl get pods | grep hello- | wc -l
-
-sed -i 's|image: "kelseyhightower/auth:1.0.0"|image: "kelseyhightower/auth:2.0.0"|' deployments/hello.yaml
-
-kubectl get replicaset
-kubectl rollout history deployment/hello
-
-kubectl get pods -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[0].image}{"\n"}{end}'
-
-kubectl rollout resume deployment/hello
-kubectl rollout status deployment/hello
-kubectl rollout undo deployment/hello
-kubectl rollout history deployment/hello
-
-kubectl get pods -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[0].image}{"\n"}{end}'
-
-kubectl create -f deployments/hello-canary.yaml
-kubectl get deployments
-
-# ================= DONE =================
+# ================== DONE ==================
 echo
-echo "${GREEN}${BOLD}==============================================================${RESET}"
-echo "${GREEN}${BOLD} 🎉 LAB COMPLETED SUCCESSFULLY – CAMPUSPERKS 🎉 ${RESET}"
-echo "${GREEN}${BOLD}==============================================================${RESET}"
+echo "=============================================="
+echo " 🎉 LAB COMPLETED SUCCESSFULLY – CAMPUSPERKS 🎉"
+echo "=============================================="
 echo
-echo "${RED}${BOLD}YouTube:${RESET} ${WHITE}${BOLD}https://www.youtube.com/@CampusPerkss${RESET}"
-echo "${GREEN}${BOLD}Like 👍 | Share 🔁 | Subscribe 🔔${RESET}"
-
+echo "Subscribe 👉 https://www.youtube.com/@CampusPerkss"
